@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::{queue::QueueProducer, utils};
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Builds a chat task; only the prompt is required at build time.
 ///
 /// Prefer [`Self::new`] for a generated ID: derived `Default` uses ID zero.
@@ -30,12 +30,24 @@ pub struct TaskBuilder {
     pub prompt: Option<String>,
 }
 
+impl Default for TaskBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskBuilder {
     /// Creates an empty builder with an ID from [`utils::id`].
     pub fn new() -> Self {
         Self {
             id: utils::id(),
-            ..Default::default()
+            model: None,
+            max_tokens: None,
+            payload: None,
+            system: None,
+            history: None,
+            schema: None,
+            prompt: None,
         }
     }
 

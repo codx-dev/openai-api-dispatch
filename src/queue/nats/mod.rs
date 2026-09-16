@@ -33,7 +33,7 @@ pub struct NatsProducer {
 }
 
 #[derive(Debug, Clone)]
-/// Consumes one model subject in the fixed `task_workers` queue group.
+/// Consumes one model subject in the workers queue group.
 ///
 /// Clones share one subscription. Replies require the incoming message's reply
 /// subject; malformed JSON and missing reply subjects return errors.
@@ -103,8 +103,10 @@ impl NatsWorker {
             .connect(url)
             .await?;
 
+        let workers_group =
+            env::var("OPENAI_API_NATS_WORKERS_GROUP").unwrap_or_else(|_| "task_workers".into());
         let subscriber = client
-            .queue_subscribe(subject.clone(), "task_workers".to_string())
+            .queue_subscribe(subject.clone(), workers_group)
             .await?;
         let subscriber = Arc::new(Mutex::new(subscriber));
 

@@ -1,6 +1,6 @@
 [package]
 name = "openai-api-dispatch"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Victor Lopez <vhrlopes@gmail.com>"]
 description = "OpenAI-compatible chat requests through memory or NATS queues."
 edition = "2024"

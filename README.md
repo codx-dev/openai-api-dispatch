@@ -59,21 +59,32 @@ Environment settings are read when constructing producers, workers, and executor
 | Variable | Default |
 | --- | --- |
 | `OPENAI_API_NATS_URL` | `nats://localhost:4222` |
+| `OPENAI_API_NATS_WORKERS_GROUP` | `task_workers` |
 | `OPENAI_API_NATS_PREFIX` | `openai-api-queue/` |
 | `OPENAI_API_URL` | `http://127.0.0.1:8000/v1` |
 | `OPENAI_API_DEFAULT_MODEL` | Unset; required by NATS workers |
 
-- A task's explicit model overrides the default and selects its NATS subject. Prefix and model are concatenated verbatim. Workers share the `task_workers` queue group; this uses Core NATS without persistence or task retries. Constructors do not wait for server confirmation of subscriptions, so startup can race with publishing.
-- Each worker handles one task at a time. Queue/API errors stop its loop without an error reply; supervise spawned workers. `send_and_wait` limits only the reply wait, not submission, and expiry does not cancel execution. Check `response.success` even when the call returns `Ok`.
-- Only non-streaming chat is implemented. The current prompt is sent as a user message; system entries in input history are ignored (use `with_system`). Returned history currently duplicates the latest user prompt before the assistant reply. Schemas request strict JSON output without local validation. Keep `max_tokens` within `u32`; it is cast unchecked. `payload` is caller metadata, not model input.
+- A task's explicit model overrides the default and selects its NATS subject.
+- Constructors do not wait for server confirmation of subscriptions, so startup can race with publishing.
+- Each worker handles one task at a time.
+- Queue/API errors stop its loop without an error reply; supervise spawned workers.
+- `send_and_wait` limits only the reply wait, not submission, and expiry does not cancel execution.
+- Check `response.success` even when the call returns `Ok`.
+- Only non-streaming chat is implemented.
+- The current prompt is sent as a user message; system entries in input history are ignored (use `with_system`).
+- Schemas request strict JSON output without local validation.
+- `payload` is caller metadata, not model input.
+- `no_std` generated IDs can repeat after restart or wraparound.
 
 ## Features
 
 Default features are `std`, `memory-queue`, and `nats-queue`; NATS implies `std`. The API executor requires `std`.
 
-For `no_std` memory queues, set `default-features = false, features = ["memory-queue"]`. An allocator and pointer/32-bit atomics are required. This backend polls once, has no timeout support, and evicts old items when bounded; the `std` backend uses bounded Tokio channels and backpressure. Use positive capacities and unique task IDs: `TaskBuilder::default()` uses ID zero, and `no_std` generated IDs can repeat after restart or wraparound.
+#### no_std
 
-Custom queues/executors implement `QueueProducer`, `QueueWorker`, and `Executor`. Only the NATS/API pairing has a public `Worker` constructor; other combinations need a caller-managed loop.
+For memory queues, use the feature `memory-queue`. An allocator and pointer/32-bit atomics are required.
+
+This backend polls once, has no timeout support, and evicts old items when bounded; the `std` backend uses bounded Tokio channels and backpressure. 
 
 ## Development
 

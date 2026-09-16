@@ -195,7 +195,6 @@ impl ExecutorAsyncOpenai {
                                 None
                             }
                         })
-                        .chain(iter::once(Interaction::User(prompt)))
                         .chain(iter::once(Interaction::Assistant(m.clone())))
                         .collect();
 
