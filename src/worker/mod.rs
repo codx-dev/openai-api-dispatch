@@ -34,14 +34,14 @@ pub struct Worker<Q: QueueWorker, E: Executor> {
     executor: E,
 }
 
-//#[cfg(feature = "jetstream-queue")]
-//impl JetStreamOpenaiWorker {
-//    /// Binds to provisioned JetStream resources and creates the API executor.
-//    pub async fn from_env_or_default() -> anyhow::Result<Self> {
-//        let queue = JetStreamWorker::from_env_or_default().await?;
-//        Ok(Self::new(queue, ExecutorAsyncOpenai::from_env_or_default()))
-//    }
-//}
+#[cfg(feature = "jetstream-queue")]
+impl JetStreamOpenaiWorker {
+    /// Binds to provisioned JetStream resources and creates the API executor.
+    pub async fn from_env_or_default() -> anyhow::Result<Self> {
+        let queue = JetStreamWorker::from_env_or_default().await?;
+        Ok(Self::new(queue, ExecutorAsyncOpenai::from_env_or_default()))
+    }
+}
 
 #[cfg(feature = "nats-queue")]
 impl NatsOpenaiWorker {

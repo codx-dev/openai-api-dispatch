@@ -446,6 +446,18 @@ impl Response {
     }
 }
 
+impl ValidatedResponse {
+    /// Returns a reference to the inner [Response].
+    pub fn as_inner(&self) -> &Response {
+        &self.0
+    }
+
+    /// Returns the inner [Response].
+    pub fn to_inner(self) -> Response {
+        self.0
+    }
+}
+
 impl Interaction {
     /// Creates an assistant turn from text.
     pub fn assistant<A: ToString>(prompt: A) -> Self {
