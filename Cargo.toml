@@ -1,6 +1,6 @@
 [package]
 name = "openai-api-dispatch"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Victor Lopez <vhrlopes@gmail.com>"]
 description = "OpenAI-compatible chat requests through memory or NATS queues."
 edition = "2024"
@@ -38,9 +38,20 @@ uuid = { version = "1.25.0", default-features = false, features = ["serde"] }
 tokio = { version = "1.53.1", features = ["full"] }
 
 [features]
-default = ["memory-queue", "nats-queue", "std"]
+default = ["jetstream-queue", "memory-queue", "nats-queue", "std"]
 memory-queue = ["spin"]
 nats-queue = ["async-nats", "std", "tokio-stream"]
+jetstream-queue = [
+  "async-nats",
+  "std",
+  "tokio-stream",
+  "async-nats/jetstream",
+  "async-nats/kv",
+  "async-nats/server_2_10",
+  "tokio/macros",
+  "tokio/rt",
+  "tokio/time",
+]
 std = [
   "anyhow/default",
   "async-openai",

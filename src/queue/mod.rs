@@ -10,6 +10,10 @@ pub mod memory;
 /// JSON request/reply over Core NATS; requires `std` and a Tokio runtime.
 pub mod nats;
 
+#[cfg(feature = "jetstream-queue")]
+/// Durable tasks, retained results, and optional JetStream provisioning.
+pub mod jetstream;
+
 /// Submits tasks and retrieves their responses.
 ///
 /// Waiting and cancellation semantics depend on the backend. Returned futures
@@ -23,8 +27,11 @@ pub trait QueueProducer {
 
     /// Consumes a handle to retrieve a response.
     ///
+    /// A returned [`Response`] may have `success == false`; use
+    /// [`Task::send_and_wait`] to turn that outcome into an error.
     /// `None` may mean no response is ready (`no_std` memory) or the response
-    /// stream ended (NATS); consult the backend before treating it as terminal.
+    /// stream ended (Core NATS). JetStream returns an error if its KV watch ends
+    /// without a result; consult the backend before treating `None` as terminal.
     fn receive_response(
         &self,
         message: Self::Message,
@@ -50,7 +57,7 @@ pub trait QueueWorker {
 
     /// Receives a task, or `None` when none is available or the stream ends.
     ///
-    /// NATS and `std` memory wait for work; `no_std` memory polls once.
+    /// Core NATS, JetStream, and `std` memory wait for work; `no_std` memory polls once.
     fn receive_task(
         &self,
     ) -> impl Future<Output = anyhow::Result<Option<WrappedTask<Self::Message>>>>;

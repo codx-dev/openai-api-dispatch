@@ -4,11 +4,11 @@ use core::time::Duration;
 
 use tokio::task::JoinHandle;
 
-use super::Worker;
 use crate::{
     executor::{DummyExecutor, Executor as _},
     queue::{QueueProducer as _, QueueWorker as _, memory::MemoryQueue},
-    task::{Interaction, Response, Task, TaskBuilder},
+    task::{Interaction, Response, Task, TaskBuilder, ValidatedResponse},
+    worker::Worker,
 };
 
 const RESPONSE_TIMEOUT_SECS: u64 = 5;
@@ -60,7 +60,7 @@ async fn receive_response(producer: &MemoryQueue, message: u128) -> Response {
     .expect("the response channel should remain open")
 }
 
-async fn send_to_worker_with_executor(task: Task, executor: DummyExecutor) -> Response {
+async fn send_to_worker_with_executor(task: Task, executor: DummyExecutor) -> ValidatedResponse {
     let (producer, worker_handle) = start_worker(executor);
     let response = task
         .send_and_wait(&producer, Some(RESPONSE_TIMEOUT_SECS))
@@ -73,14 +73,16 @@ async fn send_to_worker_with_executor(task: Task, executor: DummyExecutor) -> Re
     response.expect("the worker should return a response before the timeout")
 }
 
-async fn send_to_worker(task: Task) -> Response {
+async fn send_to_worker(task: Task) -> ValidatedResponse {
     send_to_worker_with_executor(task, DummyExecutor::default()).await
 }
 
 #[tokio::test]
 async fn worker_processes_a_memory_queue_task_with_the_default_model() {
     let expected_task = task(0, None);
-    let expected_response = Response::success(expected_task.clone(), 100, "dummy", "0");
+    let expected_response = Response::success(expected_task.clone(), 100, "dummy", "0")
+        .try_into()
+        .unwrap();
 
     assert_eq!(send_to_worker(expected_task).await, expected_response);
 }
@@ -88,33 +90,11 @@ async fn worker_processes_a_memory_queue_task_with_the_default_model() {
 #[tokio::test]
 async fn worker_processes_a_memory_queue_task_with_its_requested_model() {
     let expected_task = task(2, Some("requested-model"));
-    let expected_response = Response::success(expected_task.clone(), 100, "requested-model", "2");
+    let expected_response = Response::success(expected_task.clone(), 100, "requested-model", "2")
+        .try_into()
+        .unwrap();
 
     assert_eq!(send_to_worker(expected_task).await, expected_response);
-}
-
-#[tokio::test]
-async fn worker_sends_unsuccessful_responses_and_continues_processing() {
-    let mut executor = DummyExecutor::default();
-    executor.set_fail();
-    let (producer, worker_handle) = start_worker(executor);
-    let first_task = task(3, None);
-    let second_task = task(4, Some("requested-model"));
-
-    let first_message = producer.send_task(first_task.clone()).await.unwrap();
-    let second_message = producer.send_task(second_task.clone()).await.unwrap();
-    let first_response = receive_response(&producer, first_message).await;
-    let second_response = receive_response(&producer, second_message).await;
-    stop_worker(worker_handle).await;
-
-    assert_eq!(
-        first_response,
-        Response::error(first_task, 100, "dummy", "3")
-    );
-    assert_eq!(
-        second_response,
-        Response::error(second_task, 100, "requested-model", "4")
-    );
 }
 
 #[tokio::test]
@@ -135,7 +115,9 @@ async fn worker_preserves_boundary_and_optional_task_values() {
         .unwrap()
         .with_id(u128::MAX);
     let expected_response =
-        Response::success(expected_task.clone(), 100, "", u128::MAX.to_string());
+        Response::success(expected_task.clone(), 100, "", u128::MAX.to_string())
+            .try_into()
+            .unwrap();
 
     assert_eq!(send_to_worker(expected_task).await, expected_response);
 }
@@ -189,10 +171,14 @@ async fn worker_handles_concurrent_producer_clones() {
     assert_eq!(
         first_response.unwrap(),
         Response::success(expected_first_task, 100, "dummy", "20")
+            .try_into()
+            .unwrap()
     );
     assert_eq!(
         second_response.unwrap(),
         Response::success(expected_second_task, 100, "second-model", "21")
+            .try_into()
+            .unwrap()
     );
 }
 

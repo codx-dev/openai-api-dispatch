@@ -30,14 +30,14 @@ mod tests;
 /// an unsuccessful [`Response`]. Reported usage is total tokens, or zero if absent.
 ///
 /// Sends the optional system instruction, prior user/assistant turns, and the
-/// current prompt as a user message, in that order.
+/// current prompt as a user message, in that order. Successful responses contain
+/// those user/assistant turns with the new assistant reply appended; the current
+/// prompt appears once and system turns are omitted from returned history.
 ///
 /// # Current limitations
 ///
 /// - System entries in input history are discarded; use [`TaskChat::system`]
 ///   for a persistent system instruction.
-/// - Returned history currently duplicates the latest user prompt: it is kept
-///   from the request messages and appended again before the assistant reply.
 /// - Schemas request strict JSON output named `response`; returned text is not
 ///   locally parsed or validated against the schema.
 /// - `max_tokens` is cast from `u64` to `u32` without range checking. Payload
