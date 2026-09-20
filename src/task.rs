@@ -10,9 +10,9 @@ use crate::{queue::QueueProducer, utils};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Builds a chat task; only the prompt is required at build time.
 ///
-/// Prefer [`Self::new`] for a generated ID: derived `Default` uses ID zero.
+/// Both [`Self::new`] and [`Default::default`] generate an ID through [`utils::id`].
 pub struct TaskBuilder {
-    /// Correlation ID; must be unique among outstanding memory-queue tasks.
+    /// Correlation ID; must be unique for new work, including retained JetStream tasks.
     pub id: u128,
     /// Explicit model, overriding the producer/executor default when present.
     pub model: Option<String>,
@@ -51,7 +51,7 @@ impl TaskBuilder {
         }
     }
 
-    /// Overrides the default model; NATS uses this model to select a subject.
+    /// Overrides the default model; Core NATS also uses it to select a subject.
     pub fn with_model<M: ToString>(mut self, model: M) -> Self {
         self.model.replace(model.to_string());
         self
@@ -144,7 +144,7 @@ impl TaskBuilder {
 /// Use [`TaskBuilder`] for chat tasks. Derived `Default` has ID zero and null
 /// contents, so it is not an executable chat request.
 pub struct Task {
-    /// Correlation ID; memory queues require uniqueness for outstanding tasks.
+    /// Correlation ID; must be unique for new work, including retained JetStream tasks.
     pub id: u128,
     /// Operation encoded in [`Self::contents`].
     pub task_type: TaskType,
@@ -159,21 +159,23 @@ pub struct Task {
 }
 
 impl Task {
-    /// Submits this task and retrieves its response, which may be unsuccessful.
+    /// Submits this task and returns its response after checking the success flag.
+    ///
+    /// Returns [`ValidatedResponse`] when the received response's `success` flag
+    /// is true. An unsuccessful response, missing response, or queue error returns
+    /// `Err`. This check does not validate output text against a JSON schema.
     ///
     /// With `std`, `Some(seconds)` limits only the response wait after submission
-    /// and requires a Tokio runtime with time enabled. Expiry does not cancel
-    /// worker execution. `None` adds no timeout; backend polling semantics still
-    /// apply. Without `std`, a supplied timeout errors before sending.
-    ///
-    /// Submission/retrieval failures, timeout expiry, and `None` responses return
-    /// errors. Check the response's `success` field separately from the `Result`.
+    /// and requires a Tokio runtime with time enabled. Expiry returns an error
+    /// without cancelling worker execution. `None` adds no timeout; backend
+    /// polling semantics still apply. Without `std`, supplying a timeout returns
+    /// an error before submitting the task.
     pub async fn send_and_wait<Q: QueueProducer>(
         self,
         queue: &Q,
         timeout_secs: Option<u64>,
-    ) -> anyhow::Result<Response> {
-        match timeout_secs {
+    ) -> anyhow::Result<ValidatedResponse> {
+        let response = match timeout_secs {
             #[cfg(feature = "std")]
             Some(t) => {
                 let timeout = core::time::Duration::from_secs(t);
@@ -193,7 +195,72 @@ impl Task {
 
                 response.ok_or_else(|| anyhow::anyhow!("task response not available"))
             }
-        }
+        }?;
+
+        ValidatedResponse::try_from(response)
+    }
+
+    /// Serializes the task into JSON bytes.
+    pub fn to_json_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("infallible serialization")
+    }
+
+    /// Deserializes the task from JSON bytes.
+    pub fn try_from_json_bytes<B: AsRef<[u8]>>(bytes: B) -> anyhow::Result<Self> {
+        let bytes = bytes.as_ref();
+
+        Ok(serde_json::from_slice(bytes)?)
+    }
+
+    /// Replaces the correlation ID; use a fresh ID for new work.
+    ///
+    /// Memory queues correlate outstanding responses by this ID. JetStream also
+    /// uses it for deduplication while task records or message IDs are retained.
+    pub fn with_id(mut self, id: u128) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Sets the output limit; the API executor casts it to `u32` unchecked.
+    pub fn with_max_tokens(mut self, max_tokens: u64) -> Self {
+        self.max_tokens.replace(max_tokens);
+        self
+    }
+
+    /// Attaches opaque caller metadata to be returned with the task.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the payload cannot be serialized as JSON.
+    pub fn with_payload<P: Serialize>(mut self, payload: P) -> Self {
+        // failure serialization is considered unrecoverable from the API documentation
+        let payload = serde_json::to_value(&payload).expect("failed to serialize payload");
+        self.payload.replace(payload);
+        self
+    }
+
+    /// Overrides the model used for Core NATS routing and API execution.
+    pub fn with_model<M: ToString>(mut self, model: M) -> Self {
+        self.model.replace(model.to_string());
+        self
+    }
+
+    /// Decodes contents as [`TaskChat`], returning an error for incompatible JSON.
+    ///
+    /// Does not inspect [`Self::task_type`] or validate schema/model settings.
+    pub fn try_to_chat(&self) -> anyhow::Result<TaskChat> {
+        Ok(serde_json::from_value(self.contents.clone())?)
+    }
+
+    #[cfg(feature = "std")]
+    pub(crate) fn model(
+        &self,
+        default_model: &std::sync::Arc<Option<String>>,
+    ) -> anyhow::Result<String> {
+        self.model
+            .clone()
+            .or_else(|| default_model.as_ref().clone())
+            .ok_or_else(|| anyhow::anyhow!("no model provided"))
     }
 }
 
@@ -210,6 +277,47 @@ pub struct Response {
     pub model: String,
     /// Output text or failure details; structured output remains JSON text.
     pub contents: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Response returned after its success flag has been checked.
+///
+/// [`Task::send_and_wait`] and [`TryFrom<Response>`] reject responses whose
+/// `success` flag is false. Validation does not inspect the output
+/// text, parse JSON, or check a schema. Direct construction and deserialization
+/// do not perform the success-flag check.
+pub struct ValidatedResponse {
+    /// Original task; the API executor updates its history on successful output.
+    pub task: Task,
+    /// Token usage; the API executor reports total tokens, or zero if absent.
+    pub tokens: u64,
+    /// Resolved request model; not necessarily the model name returned by the API.
+    pub model: String,
+    /// Output text; structured output remains JSON text without schema validation.
+    pub contents: String,
+}
+
+impl TryFrom<Response> for ValidatedResponse {
+    type Error = anyhow::Error;
+
+    fn try_from(response: Response) -> anyhow::Result<Self> {
+        let Response {
+            task,
+            success,
+            tokens,
+            model,
+            contents,
+        } = response;
+
+        anyhow::ensure!(success);
+
+        Ok(Self {
+            task,
+            tokens,
+            model,
+            contents,
+        })
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -274,56 +382,6 @@ pub enum Interaction {
     User(String),
 }
 
-impl Task {
-    /// Replaces the correlation ID; avoid duplicates among outstanding tasks.
-    pub fn with_id(mut self, id: u128) -> Self {
-        self.id = id;
-        self
-    }
-
-    /// Sets the output limit; the API executor casts it to `u32` unchecked.
-    pub fn with_max_tokens(mut self, max_tokens: u64) -> Self {
-        self.max_tokens.replace(max_tokens);
-        self
-    }
-
-    /// Attaches opaque caller metadata to be returned with the task.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the payload cannot be serialized as JSON.
-    pub fn with_payload<P: Serialize>(mut self, payload: P) -> Self {
-        // failure serialization is considered unrecoverable from the API documentation
-        let payload = serde_json::to_value(&payload).expect("failed to serialize payload");
-        self.payload.replace(payload);
-        self
-    }
-
-    /// Overrides the model used for NATS routing and API execution.
-    pub fn with_model<M: ToString>(mut self, model: M) -> Self {
-        self.model.replace(model.to_string());
-        self
-    }
-
-    /// Decodes contents as [`TaskChat`], returning an error for incompatible JSON.
-    ///
-    /// Does not inspect [`Self::task_type`] or validate schema/model settings.
-    pub fn try_to_chat(&self) -> anyhow::Result<TaskChat> {
-        Ok(serde_json::from_value(self.contents.clone())?)
-    }
-
-    #[cfg(feature = "std")]
-    pub(crate) fn model(
-        &self,
-        default_model: &std::sync::Arc<Option<String>>,
-    ) -> anyhow::Result<String> {
-        self.model
-            .clone()
-            .or_else(|| default_model.as_ref().clone())
-            .ok_or_else(|| anyhow::anyhow!("no model provided"))
-    }
-}
-
 impl Response {
     /// Creates a successful response without changing the task or its history.
     pub fn success<M: ToString, C: ToString>(
@@ -364,7 +422,8 @@ impl Response {
     }
 
     /// Decodes returned history; missing, null, or malformed history is an error.
-    /// The API executor currently includes the latest user prompt twice.
+    /// The API executor returns prior user/assistant turns, the current user
+    /// prompt once, and the new assistant reply; system turns are omitted.
     pub fn chat_history(&self) -> anyhow::Result<Vec<Interaction>> {
         let history = self
             .task

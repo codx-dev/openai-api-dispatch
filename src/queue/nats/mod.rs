@@ -55,17 +55,7 @@ impl NatsProducer {
         let default_model = utils::get_default_model();
         let prefix =
             env::var("OPENAI_API_NATS_PREFIX").unwrap_or_else(|_| "openai-api-queue/".into());
-        let url =
-            env::var("OPENAI_API_NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".into());
-        let client = async_nats::ConnectOptions::new()
-            .request_timeout(None)
-            .connect(url)
-            .await?;
-
-        tracing::info!(
-            "nats client connected to `{:?}`",
-            client.server_info().connect_urls
-        );
+        let client = utils::nats_client_from_env_or_default().await?;
 
         Ok(Self {
             client,

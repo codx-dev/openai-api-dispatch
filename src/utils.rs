@@ -42,6 +42,23 @@ pub fn get_default_model() -> std::sync::Arc<Option<String>> {
     std::sync::Arc::new(default_model)
 }
 
+#[cfg(any(feature = "nats-queue", feature = "jetstream-queue"))]
+pub(crate) async fn nats_client_from_env_or_default() -> anyhow::Result<async_nats::Client> {
+    let url =
+        std::env::var("OPENAI_API_NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".into());
+    let client = async_nats::ConnectOptions::new()
+        .request_timeout(None)
+        .connect(url)
+        .await?;
+
+    tracing::info!(
+        "nats client connected to `{:?}`",
+        client.server_info().connect_urls
+    );
+
+    Ok(client)
+}
+
 #[test]
 fn id_increments() {
     let a = (0..1_000).map(|_| id());

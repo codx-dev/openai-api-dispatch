@@ -9,25 +9,41 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(feature = "nats-queue", feature = "std"))]
-use crate::{executor::openai::ExecutorAsyncOpenai, queue::nats::NatsWorker};
+#[cfg(any(feature = "nats-queue", feature = "jetstream-queue"))]
+use crate::executor::openai::ExecutorAsyncOpenai;
+#[cfg(feature = "jetstream-queue")]
+use crate::queue::jetstream::JetStreamWorker;
+#[cfg(feature = "nats-queue")]
+use crate::queue::nats::NatsWorker;
 
-#[cfg(all(feature = "nats-queue", feature = "std"))]
+#[cfg(feature = "nats-queue")]
 /// A Core NATS consumer backed by the OpenAI-compatible chat executor.
 pub type NatsOpenaiWorker = Worker<NatsWorker, ExecutorAsyncOpenai>;
+
+#[cfg(feature = "jetstream-queue")]
+/// A durable JetStream worker backed by the OpenAI-compatible executor.
+pub type JetStreamOpenaiWorker = Worker<JetStreamWorker, ExecutorAsyncOpenai>;
 
 #[derive(Debug, Clone)]
 /// Connects a queue consumer to an executor, processing one task at a time.
 ///
-/// Only `NatsOpenaiWorker::from_env_or_default` currently has a public
-/// constructor (with `nats-queue` enabled). Other queue/executor combinations
-/// require a caller-managed loop using their respective traits.
+/// Use [`Self::new`] for any queue/executor combination, then [`Self::run`] to
+/// receive tasks, execute them, and send responses through the queue.
 pub struct Worker<Q: QueueWorker, E: Executor> {
     queue: Q,
     executor: E,
 }
 
-#[cfg(all(feature = "nats-queue", feature = "std"))]
+//#[cfg(feature = "jetstream-queue")]
+//impl JetStreamOpenaiWorker {
+//    /// Binds to provisioned JetStream resources and creates the API executor.
+//    pub async fn from_env_or_default() -> anyhow::Result<Self> {
+//        let queue = JetStreamWorker::from_env_or_default().await?;
+//        Ok(Self::new(queue, ExecutorAsyncOpenai::from_env_or_default()))
+//    }
+//}
+
+#[cfg(feature = "nats-queue")]
 impl NatsOpenaiWorker {
     /// Builds the NATS consumer and API executor from their environment settings.
     ///
@@ -43,11 +59,18 @@ impl NatsOpenaiWorker {
 }
 
 impl<Q: QueueWorker, E: Executor> Worker<Q, E> {
+    /// Connects a queue to an executor without starting the processing loop.
+    pub fn new(queue: Q, executor: E) -> Self {
+        Self { queue, executor }
+    }
+
     /// Processes tasks sequentially until the queue returns `None` or an error.
     ///
-    /// Queue and executor errors stop the loop immediately; execution errors
-    /// are not converted into replies, and no application-level retry occurs.
-    /// Responses with `success == false` are sent normally and do not stop it.
+    /// Queue and executor errors stop the loop. An executor error leaves the
+    /// task without a response; JetStream can redeliver an unacknowledged task
+    /// to an active worker within its delivery and retention limits. This loop
+    /// does not restart itself or retry execution errors locally.
+    /// Responses with `success == false` are sent back and do not stop the loop.
     /// A polling queue returning `None` ends the loop even if more work may arrive.
     /// There is no shutdown signal; callers must arrange cancellation themselves.
     pub async fn run(self) -> anyhow::Result<()> {
