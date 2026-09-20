@@ -1,3 +1,5 @@
+use core::ops::{Deref, DerefMut};
+
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -279,57 +281,55 @@ pub struct Response {
     pub contents: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Response returned after its success flag has been checked.
 ///
 /// [`Task::send_and_wait`] and [`TryFrom<Response>`] reject responses whose
 /// `success` flag is false. Validation does not inspect the output
 /// text, parse JSON, or check a schema. Direct construction and deserialization
 /// do not perform the success-flag check.
-pub struct ValidatedResponse {
-    /// Original task; the API executor updates its history on successful output.
-    pub task: Task,
-    /// Token usage; the API executor reports total tokens, or zero if absent.
-    pub tokens: u64,
-    /// Resolved request model; not necessarily the model name returned by the API.
-    pub model: String,
-    /// Output text; structured output remains JSON text without schema validation.
-    pub contents: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidatedResponse(pub Response);
+
+impl Deref for ValidatedResponse {
+    type Target = Response;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ValidatedResponse {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<ValidatedResponse> for Response {
+    fn from(response: ValidatedResponse) -> Self {
+        response.0
+    }
 }
 
 impl TryFrom<Response> for ValidatedResponse {
     type Error = anyhow::Error;
 
     fn try_from(response: Response) -> anyhow::Result<Self> {
-        let Response {
-            task,
-            success,
-            tokens,
-            model,
-            contents,
-        } = response;
+        anyhow::ensure!(response.success, response.contents);
 
-        anyhow::ensure!(success);
-
-        Ok(Self {
-            task,
-            tokens,
-            model,
-            contents,
-        })
+        Ok(Self(response))
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Supported operations; only chat is currently implemented.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskType {
     /// A chat request with [`TaskChat`] contents.
     #[default]
     Chat,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Chat inputs encoded in [`Task::contents`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskChat {
     /// Optional system instruction prepended to the model's messages.
     pub system: Option<String>,
@@ -371,8 +371,8 @@ impl TaskChat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// A text-only conversation turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Interaction {
     /// Text previously returned by the model.
     Assistant(String),
